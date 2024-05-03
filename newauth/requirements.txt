@@ -1,0 +1,7 @@
+fastapi[all]
+uvicorn[standard]
+SQLAlchemy
+langchain
+python-jose
+passlib
+openai
