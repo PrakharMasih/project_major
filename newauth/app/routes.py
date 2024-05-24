@@ -11,6 +11,10 @@ from langchain.memory import ConversationBufferMemory
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 
+from langchain.tools import DuckDuckGoSearchRun, YouTubeSearchTool
+
+from langchain_community.tools import WikipediaQueryRun
+from langchain_community.utilities import WikipediaAPIWrapper
 
 
 
@@ -18,13 +22,6 @@ from langchain.chains import LLMChain
 from langchain import SerpAPIWrapper
 from langchain.agents import initialize_agent, Tool, AgentExecutor
 from langchain.chat_models import ChatOpenAI
-
-
-
-
-
-
-
 
 
 
@@ -36,6 +33,7 @@ from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 
 router = APIRouter()
+
 
 
 @router.post("/register/", response_model=schemas.UserInDBBase)
@@ -106,41 +104,29 @@ prompt_template = PromptTemplate(
             template=qa_template
     )
 
-@router.post("/conversation")
-async def memory_conversaton(
-    query: str,
+
+
+
+@router.get('/conversation')
+async def readconversation(
     current_user: schemas.UserInDBBase = Depends(auth.get_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db)
 ):
-    llm1 = OpenAI(temperature=0, streaming=True)
-    search = SerpAPIWrapper()
+    db_user = db.query(User).get(current_user.id)
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    db_conversation = db.query(models.Conversation).filter(models.Conversation.user_id == current_user.id).all()
 
-    tools = [
-        Tool(
-            name="Search",
-            func=search.run,
-            description="useful for when you need to answer questions about current events. You should ask targeted questions",
-        )
-    ]
-    agent = initialize_agent(
-        tools, llm1, agent="chat-zero-shot-react-description", verbose=True
-    )
-    data = agent.run
-    print(data)
+    return db_conversation
 
-    pass
-    
-
-
+  
 @router.post("/conversation")
-async def memory_conversaton(
+async def memoryconversaton(
     query: str,
     current_user: schemas.UserInDBBase = Depends(auth.get_current_user),
     db: Session = Depends(get_db),
 ):
     db_user = db.query(User).get(current_user.id)
-
-    # print("--------------------------------------->", db_user.id, db_user.username)
 
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -167,7 +153,6 @@ async def memory_conversaton(
         query= query,
         response = response
     )
-    print('------------------------------------------------------------->', new_conversation)
     db.add(new_conversation)
     db.commit()
     db.refresh(new_conversation)
@@ -176,59 +161,146 @@ async def memory_conversaton(
 
 
 
-
-# @router.post("/conversation/")
-# async def gen_conversation(
-#     query: str,
-#     current_user: schemas.UserInDBBase = Depends(auth.get_current_user),
-#     db: Session = Depends(get_db),
-# ):
-#     db_user = db.query(User).get(current_user.id)
-
-#     if not db_user:
-#         raise HTTPException(status_code=404, detail="User not found")
-    
-#     context = generate_context(db_user)
-#     # print("newknjnjnjknsfd--------->", context)
-
-#     memory = ConversationBufferWindowMemory( k=2)
-
-#     llm = OpenAI(
-#         temperature=0,
-#         openai_api_key=os.environ.get("OPENAI_API_KEY"),
-#     )
-
-#     prompt = PromptTemplate(
-#         input_variables=["context", "question", "memory"], template=qa_template
-#     )
-
-#     chain = LLMChain(llm=llm, prompt=prompt)
-
-#     # print("chain------->", chain)
-#     response = chain.run(question=query, context=context, memory=memory)
-#     # print(" response-------->", response)
-#     new_conversation = models.Conversation(
-#     user_id=current_user.id,
-#     query=query,
-#     response=response
-#     )
-#     # print('New con-------------->',new_conversation)
-#     db.add(new_conversation)
-#     db.commit()
-#     db.refresh(new_conversation)
-#     return {"response": new_conversation}
-
-@router.get('/conversation/')
-async def read_conversation(
+@router.post('/duck')
+async def duck(
+    query: str,
     current_user: schemas.UserInDBBase = Depends(auth.get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    db_user = db.query(User).get(current_user.id)
-    if not db_user:
-        raise HTTPException(status_code=404, detail="User not found")
-    db_conversation = db.query(models.Conversation).filter(models.Conversation.user_id == current_user.id).all()
-    # print(db_conversation)
-    return db_conversation
+    ddg_search = DuckDuckGoSearchRun()
+
+    tools = [
+        Tool(
+            name="DuckDuckGo Search",
+            func= ddg_search.run,
+            description = "Useful to Browser information from the internet"
+        )
+    ]
+
+    llm = OpenAI(
+        temperature=0,
+        openai_api_key=os.environ.get("OPENAI_API_KEY"),
+    )
+
+    agent = initialize_agent(
+        tools,
+        llm,
+        prompt=prompt_template,
+        memory= memory,
+        agent="zero-shot-react-description",
+        verbose=True
+    )
+
+    response = agent.run(query)
+
+    new_conversation = models.Conversation(
+        user_id = current_user.id,
+        query= query,
+        response = response
+    )
+    db.add(new_conversation)
+    db.commit()
+    db.refresh(new_conversation)
+    
+    return new_conversation
+
+
+@router.post('/youwiki')
+async def youtube(
+    query: str,
+    current_user: schemas.UserInDBBase = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
+):
+    youtube_search = YouTubeSearchTool()
+    api_wrapper = WikipediaAPIWrapper(top_k_results=1, doc_content_chars_max=100)
+    wikipedia = WikipediaQueryRun(api_wrapper=api_wrapper)
+    
+    tools = [
+        Tool(
+            name="Youtube Search",
+            func= youtube_search.run,
+            description = "Useful for when the user explicitly asks you to look on Youtube"
+        ),
+        Tool(
+            name="Wikipedia Search",
+            func= wikipedia.run,
+            description = "Useful when users request biographies or historical moments"
+        )
+
+    ]
+
+    llm = OpenAI(
+        temperature=0,
+        openai_api_key=os.environ.get("OPENAI_API_KEY"),
+    )
+
+    agent = initialize_agent(
+        tools,
+        llm,
+        prompt=prompt_template,
+        memory= memory,
+        agent="zero-shot-react-description",
+        verbose=True
+    )
+
+    response = agent.run(query)
+
+    new_conversation = models.Conversation(
+        user_id = current_user.id,
+        query= query,
+        response = response
+    )
+    db.add(new_conversation)
+    db.commit()
+    db.refresh(new_conversation)
+    
+    return new_conversation
+
+@router.post('/wiki')
+async def wiki(
+    query: str,
+    current_user: schemas.UserInDBBase = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
+):
+
+    api_wrapper = WikipediaAPIWrapper(top_k_results=1, doc_content_chars_max=100)
+    wikipedia = WikipediaQueryRun(api_wrapper=api_wrapper)
+    
+    tools = [
+        Tool(
+            name="Wikipedia Search",
+            func= wikipedia.run,
+            description = "Useful when users request biographies or historical moments"
+        )
+    ]
+
+    llm = OpenAI(
+        temperature=0,
+        openai_api_key=os.environ.get("OPENAI_API_KEY"),
+    )
+
+    agent = initialize_agent(
+        tools,
+        llm,
+        prompt=prompt_template,
+        memory= memory,
+        agent="zero-shot-react-description",
+        verbose=True
+    )
+
+    response = agent.run(query)
+
+    new_conversation = models.Conversation(
+        user_id = current_user.id,
+        query= query,
+        response = response
+    )
+    db.add(new_conversation)
+    db.commit()
+    db.refresh(new_conversation)
+    
+    return new_conversation
+
 
 @router.get('/alluser')
 async def get_alluser(

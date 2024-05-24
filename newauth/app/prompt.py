@@ -17,6 +17,7 @@ qa_template = """
                 Always encouraging and positive, you are committed to helping users to get accurate answer of each query asked.
                 conversation history:
                 {history}
+                
 
                 
 
